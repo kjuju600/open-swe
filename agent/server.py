@@ -63,7 +63,7 @@ from .utils.sandbox import create_sandbox
 client = get_client()
 
 SANDBOX_CREATING = "__creating__"
-SANDBOX_CREATION_TIMEOUT = 180
+SANDBOX_CREATION_TIMEOUT = 600
 SANDBOX_POLL_INTERVAL = 1.0
 
 from .utils.agents_md import read_agents_md_in_sandbox
@@ -134,19 +134,28 @@ async def _clone_or_pull_repo_in_sandbox(  # noqa: PLR0915
             None, git_has_uncommitted_changes, sandbox_backend, repo_dir
         )
 
-        if has_changes:
-            logger.warning("Repo has uncommitted changes at %s, skipping pull", repo_dir)
-            return repo_dir
-
-        logger.info("Repo is clean, pulling latest changes from %s/%s", owner, repo)
+        # Always reset to master and pull latest — ensures each run starts fresh
+        logger.info("Resetting repo to master and pulling latest from %s/%s", owner, repo)
 
         await loop.run_in_executor(None, setup_git_credentials, sandbox_backend, token)
         try:
-            pull_result = await loop.run_in_executor(
+            # Discard any local changes and switch to master
+            reset_result = await loop.run_in_executor(
                 None,
                 sandbox_backend.execute,
-                f"cd {repo_dir} && git {cred_helper_arg} pull origin $(git rev-parse --abbrev-ref HEAD)",
+                f"cd {repo_dir} && git checkout -- . && git clean -fd && git checkout master && git {cred_helper_arg} pull origin master",
             )
+            logger.debug("Git reset+pull result: exit_code=%s", reset_result.exit_code)
+            if reset_result.exit_code != 0:
+                logger.warning(
+                    "Git reset+pull failed with exit code %s, trying fresh clone",
+                    reset_result.exit_code,
+                )
+                # If reset fails, remove and re-clone
+                await loop.run_in_executor(None, remove_directory, sandbox_backend, repo_dir)
+                return await _clone_or_pull_repo_in_sandbox(sandbox_backend, owner, repo, token)
+
+            pull_result = reset_result  # For the debug log below
             logger.debug("Git pull result: exit_code=%s", pull_result.exit_code)
             if pull_result.exit_code != 0:
                 logger.warning(
@@ -406,7 +415,7 @@ async def get_agent(config: RunnableConfig) -> Pregel:  # noqa: PLR0915
         model=make_model(
             os.environ.get("LLM_MODEL_ID", DEFAULT_LLM_MODEL_ID),
             temperature=0,
-            max_tokens=20_000,
+            max_tokens=16_000,
         ),
         system_prompt=construct_system_prompt(
             repo_dir,

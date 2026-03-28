@@ -1363,12 +1363,20 @@ async def process_github_issue(payload: dict[str, Any], event_type: str) -> None
         logger.warning("No email mapping for GitHub user '%s', skipping", github_login)
         return
 
-    thread_id = generate_thread_id_from_github_issue(issue_id)
+    comment = payload.get("comment", {})
+    comment_id_str = str(comment.get("id", ""))
+
+    # Generate thread ID: use comment ID to ensure each trigger gets a fresh
+    # thread/branch, preventing reuse of closed PR branches.
+    if event_type == "issue_comment" and comment_id_str:
+        thread_id = generate_thread_id_from_github_issue(f"{issue_id}:{comment_id_str}")
+    else:
+        thread_id = generate_thread_id_from_github_issue(issue_id)
+
     existing_thread = await _thread_exists(thread_id)
     github_token = await _get_or_resolve_thread_github_token(thread_id, email)
     app_token = await get_github_app_installation_token()
     reaction_token = github_token or app_token
-    comment = payload.get("comment", {})
     comment_id = comment.get("id")
     if event_type == "issue_comment" and comment_id:
         if not reaction_token:
