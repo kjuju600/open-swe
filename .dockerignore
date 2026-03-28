@@ -1,0 +1,12 @@
+.venv/
+.git/
+.pytest_cache/
+.langgraph_api/
+__pycache__/
+*.pyc
+.env
+Buffet-System/
+CTT/
+tests/
+*.md
+!README.md

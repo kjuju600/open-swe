@@ -1,0 +1,41 @@
+FROM python:3.12-slim
+
+# System dependencies for git operations and the local sandbox
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    build-essential \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 (needed for sandbox to run npm/playwright in Buffet-System)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast Python package management
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Copy dependency files first for layer caching
+COPY pyproject.toml ./
+COPY langgraph.json ./
+
+# Install Python dependencies
+RUN uv pip install --system -e . 2>/dev/null || uv pip install --system .
+
+# Copy application code
+COPY agent/ ./agent/
+COPY static/ ./static/
+
+# Configure git for sandbox operations
+RUN git config --global user.name "open-swe[bot]" \
+    && git config --global user.email "open-swe[bot]@users.noreply.github.com" \
+    && git config --global init.defaultBranch main
+
+# Railway injects PORT env var; langgraph dev uses it
+ENV PORT=2024
+EXPOSE 2024
+
+CMD ["langgraph", "dev", "--port", "2024", "--no-browser", "--no-reload"]
